@@ -1139,7 +1139,7 @@
       }
     }
 
-    function generateImage() {
+    async function generateImage() {
       const prefixSelect = document.getElementById('prefixPrompt');
       const promptInput = document.getElementById('promptInput');
       const suffixSelect = document.getElementById('suffixPrompt');
@@ -1243,6 +1243,89 @@
       }
     }
 
+    async function commitText() {
+      if (!currentTextPosition) return;
+      
+      const canvas = document.getElementById('editCanvas');
+      const ctx = canvas.getContext('2d');
+      const text = document.getElementById('textInput').value;
+      
+      if (!text.trim()) {
+        cancelText();
+        return;
+      }
+      
+      ctx.save();
+      
+      const fontFamily = document.getElementById('fontFamily').value;
+      const fontSize = document.getElementById('fontSize').value;
+      const color = document.getElementById('textColor').value;
+      
+      // Scale the font size based on the canvas scaling
+      const scaledFontSize = fontSize * currentTextPosition.scaleX;
+      ctx.font = `${scaledFontSize}px ${fontFamily}`;
+      ctx.fillStyle = color;
+      ctx.textBaseline = 'top';
+      ctx.textAlign = 'left';  
+  
+      ctx.fillText(text, currentTextPosition.x, currentTextPosition.y);
+      
+      ctx.restore();
+      
+      originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+      // Add text modification to prompt history if a gallery image is being edited
+      const sourceImage = galleryImages.find(img => img.imageUrl === currentImage.src);
+      
+      if (sourceImage) {
+        // Get the base prompt history - either from the current image or create new from source
+        const basePromptHistory = galleryImages.find(img => 
+          img.imageUrl === currentImage.src
+        )?.promptHistory || [{
+          prompt: sourceImage.prompt,
+          timestamp: sourceImage.created_at,
+          username: sourceImage.username
+        }];
+        
+        // Create a fresh copy to avoid reference issues
+        const promptHistory = [...basePromptHistory];
+        
+        // Add text modification entry
+        promptHistory.push({
+          prompt: `Added text: "${text}" (${fontFamily}, ${fontSize}px, ${color})`,
+          timestamp: new Date().toISOString(),
+          type: 'text-edit',
+          username: room.party.client.username
+        });
+        
+        // Create new modified image entry
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        const file = new File([blob], 'edited-image.png', { type: 'image/png' });
+        const imageUrl = await websim.upload(file);
+        
+        await room.collection('gallery_images').create({
+          prompt: sourceImage.prompt,
+          title: sourceImage.title || sourceImage.prompt,
+          imageUrl: imageUrl,
+          views: 0,
+          uses: 0,
+          modified: true,
+          promptHistory: promptHistory,
+          sourceImageId: sourceImage.id
+        });
+
+        // Update usage count of source image
+        await room.collection('gallery_images').update(sourceImage.id, {
+          uses: (sourceImage.uses || 0) + 1
+        });
+
+        // Update the current image reference
+        currentImage.src = imageUrl;
+      }
+      
+      cancelText();
+    }
+
     async function generateSelectionFill() {
       if (!currentSelection) return;
       
@@ -1295,14 +1378,14 @@
         const tempCtx = tempCanvas.getContext('2d');
         const selectionWidth = maxX - minX + 1;
         const selectionHeight = maxY - minY + 1;
-          
+        
         tempCanvas.width = selectionWidth;
         tempCanvas.height = selectionHeight;
-          
+        
         tempCtx.drawImage(generatedImage, 0, 0, selectionWidth, selectionHeight);
-          
+        
         const scaledImageData = tempCtx.getImageData(0, 0, selectionWidth, selectionHeight);
-          
+        
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const pixels = imageData.data;
 
@@ -1326,21 +1409,26 @@
         ctx.putImageData(imageData, 0, 0);
         originalImageData = imageData;
 
-        const sourceImage = galleryImages.find(img => 
-          img.imageUrl === currentImage.src
-        );
+        // Get source image and handle database updates
+        const sourceImage = galleryImages.find(img => img.imageUrl === currentImage.src);
         
         if (sourceImage) {
+          // Update source image usage count only once
           await room.collection('gallery_images').update(sourceImage.id, {
             uses: (sourceImage.uses || 0) + 1
           });
           
-          const promptHistory = [...(sourceImage.promptHistory || [{
-            prompt: sourceImage.prompt,
-            timestamp: sourceImage.created_at,
-            username: sourceImage.username
-          }])];
-          
+          // Create a new prompt history entry
+          const promptHistory = sourceImage.promptHistory ? 
+            [...sourceImage.promptHistory] : 
+            [{
+              prompt: sourceImage.prompt,
+              timestamp: sourceImage.created_at,
+              username: sourceImage.username,
+              type: 'original'
+            }];
+
+          // Add the new fill modification to history
           promptHistory.push({
             prompt: fullPrompt,
             timestamp: new Date().toISOString(),
@@ -1348,12 +1436,14 @@
             username: room.party.client.username
           });
 
+          // Create new image blob and upload
           const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
           const file = new File([blob], 'edited-image.png', { type: 'image/png' });
           const imageUrl = await websim.upload(file);
           
+          // Create single new database entry with complete history
           await room.collection('gallery_images').create({
-            prompt: sourceImage.prompt,
+            prompt: fullPrompt,
             title: sourceImage.title || sourceImage.prompt,
             imageUrl: imageUrl,
             views: 0,
@@ -1363,6 +1453,7 @@
             sourceImageId: sourceImage.id
           });
 
+          // Update the current image reference
           currentImage.src = imageUrl;
         }
         
@@ -1378,19 +1469,23 @@
       const canvas = document.getElementById('editCanvas');
       const rect = canvas.getBoundingClientRect();
       
+      // Remove existing preview
       if (textPreview) {
         textPreview.remove();
       }
       
+      // Create new preview at click position
       textPreview = document.createElement('div');
       textPreview.className = 'text-preview';
       textPreview.style.position = 'fixed';
       textPreview.style.left = `${clientX}px`;
       textPreview.style.top = `${clientY}px`;
 
+      // Calculate scale factor between canvas display size and actual size
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
 
+      // Store scale factors with position
       currentTextPosition = { 
         x: canvasX, 
         y: canvasY,
@@ -1400,16 +1495,19 @@
 
       document.body.appendChild(textPreview);
       
+      // Position controls below preview
       const controlsHeight = 100; 
       const controlsWidth = 250;  
       
       let top = clientY + 30; 
       let left = clientX;
       
+      // Adjust vertical position if too close to bottom
       if (top + controlsHeight > window.innerHeight) {
         top = window.innerHeight - controlsHeight - 10;
       }
       
+      // Adjust horizontal position if too close to right edge
       if (left + controlsWidth > window.innerWidth) {
         left = window.innerWidth - controlsWidth - 10;
       }
@@ -1437,77 +1535,6 @@
       textPreview.style.color = color;
       textPreview.style.pointerEvents = 'none';
       textPreview.textContent = text || 'Enter text...';
-    }
-
-    async function commitText() {
-      if (!currentTextPosition) return;
-      
-      const canvas = document.getElementById('editCanvas');
-      const ctx = canvas.getContext('2d');
-      const text = document.getElementById('textInput').value;
-      
-      if (!text.trim()) {
-        cancelText();
-        return;
-      }
-      
-      ctx.save();
-      
-      const fontFamily = document.getElementById('fontFamily').value;
-      const fontSize = document.getElementById('fontSize').value;
-      const color = document.getElementById('textColor').value;
-      
-      const scaledFontSize = fontSize * currentTextPosition.scaleX;
-      ctx.font = `${scaledFontSize}px ${fontFamily}`;
-      ctx.fillStyle = color;
-      ctx.textBaseline = 'top';
-      ctx.textAlign = 'left';  
-  
-      ctx.fillText(text, currentTextPosition.x, currentTextPosition.y);
-      
-      ctx.restore();
-      
-      originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-      const sourceImage = galleryImages.find(img => img.imageUrl === currentImage.src);
-      
-      if (sourceImage) {
-        const promptHistory = [...(sourceImage.promptHistory || [{
-          prompt: sourceImage.prompt,
-          timestamp: sourceImage.created_at,
-          username: sourceImage.username
-        }])];
-        
-        promptHistory.push({
-          prompt: `Added text: "${text}" (${fontFamily}, ${fontSize}px, ${color})`,
-          timestamp: new Date().toISOString(),
-          type: 'text-edit',
-          username: room.party.client.username
-        });
-
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-        const file = new File([blob], 'edited-image.png', { type: 'image/png' });
-        const imageUrl = await websim.upload(file);
-
-        await room.collection('gallery_images').create({
-          prompt: sourceImage.prompt,
-          title: sourceImage.title || sourceImage.prompt,
-          imageUrl: imageUrl,
-          views: 0,
-          uses: 0,
-          modified: true,
-          promptHistory: promptHistory,
-          sourceImageId: sourceImage.id
-        });
-
-        await room.collection('gallery_images').update(sourceImage.id, {
-          uses: (sourceImage.uses || 0) + 1
-        });
-
-        currentImage.src = imageUrl;
-      }
-      
-      cancelText();
     }
 
     async function cancelText() {
@@ -1645,7 +1672,7 @@
 
     function showUserGallery(username) {
       currentUserFilter = username;
-      currentPage = 1;  
+      currentPage = 1;  // Reset to first page
       renderGallery();
     }
 
