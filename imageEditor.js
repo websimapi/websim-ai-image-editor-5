@@ -246,3 +246,162 @@ function resetImage() {
   ctx.putImageData(originalImageData, 0, 0);
   currentSelection = null;
 }
+
+async function generateSelectionFill() {
+  if (!currentSelection) return;
+  
+  const prompt = document.getElementById('selectionPromptInput').value.trim();
+  if (!prompt) {
+    alert('Please enter a prompt for the selected region');
+    return;
+  }
+
+  const prefixSelect = document.getElementById('prefixPrompt');
+  const suffixSelect = document.getElementById('suffixPrompt');
+  const fullPrompt = `${prefixSelect.value}${prompt}${suffixSelect.value}`;
+
+  const loadingSpinner = document.getElementById('loadingSpinner');
+  loadingSpinner.style.display = 'block';
+
+  const generatedImage = document.createElement('img');
+  const tempId = `fillImage_${Date.now()}`;
+  generatedImage.id = tempId;
+  generatedImage.crossOrigin = 'anonymous';
+  generatedImage.style.display = 'none';
+  
+  generatedImage.src = fullPrompt;
+  generatedImage.alt = fullPrompt;
+
+  const initialSrc = generatedImage.src;
+
+  generatedImage.onload = async function() {
+    // Only proceed if this is the final image load event for our intended src
+    if (generatedImage.src !== initialSrc) {
+      loadingSpinner.style.display = 'none';
+      
+      const canvas = document.getElementById('editCanvas');
+      const ctx = canvas.getContext('2d');
+
+      let minX = canvas.width;
+      let minY = canvas.height;
+      let maxX = 0;
+      let maxY = 0;
+
+      for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+          const pos = y * canvas.width + x;
+          if (currentSelection[pos]) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+          }
+        }
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      const selectionWidth = maxX - minX + 1;
+      const selectionHeight = maxY - minY + 1;
+      
+      tempCanvas.width = selectionWidth;
+      tempCanvas.height = selectionHeight;
+      
+      tempCtx.drawImage(generatedImage, 0, 0, selectionWidth, selectionHeight);
+      
+      const scaledImageData = tempCtx.getImageData(0, 0, selectionWidth, selectionHeight);
+      
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          const pos = y * canvas.width + x;
+          if (currentSelection[pos]) {
+            const scaledX = x - minX;
+            const scaledY = y - minY;
+            const scaledPos = (scaledY * selectionWidth + scaledX) * 4;
+            const targetPos = pos * 4;
+            
+            pixels[targetPos] = scaledImageData.data[scaledPos];
+            pixels[targetPos + 1] = scaledImageData.data[scaledPos + 1];
+            pixels[targetPos + 2] = scaledImageData.data[scaledPos + 2];
+            pixels[targetPos + 3] = scaledImageData.data[scaledPos + 3];
+          }
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      originalImageData = imageData;
+
+      const sourceImage = galleryImages.find(img => 
+        img.imageUrl === currentImage.src
+      );
+      
+      if (sourceImage) {
+        // Check for recent edit by same user
+        const lastEdit = galleryImages
+          .filter(img => img.sourceImageId === sourceImage.id)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+        
+        // Get the base prompt history from either current edit or source image
+        const basePromptHistory = lastEdit?.username === room.party.client.username ? 
+          lastEdit.promptHistory : 
+          [{
+            prompt: sourceImage.prompt,
+            timestamp: sourceImage.created_at,
+            username: sourceImage.username
+          }];
+        
+        // Create a fresh copy of the history
+        const promptHistory = [...basePromptHistory];
+        
+        // Add new edit entry
+        promptHistory.push({
+          prompt: fullPrompt,
+          timestamp: new Date().toISOString(),
+          type: 'selection-fill',
+          username: room.party.client.username
+        });
+
+        // Generate new image URL
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        const file = new File([blob], 'edited-image.png', { type: 'image/png' });
+        const imageUrl = await websim.upload(file);
+
+        if (lastEdit?.username === room.party.client.username) {
+          // Update existing edit
+          await room.collection('gallery_images').update(lastEdit.id, {
+            imageUrl: imageUrl,
+            promptHistory: promptHistory
+          });
+        } else {
+          // Create new edit entry
+          await room.collection('gallery_images').create({
+            prompt: fullPrompt,
+            title: fullPrompt,
+            imageUrl: imageUrl,
+            views: 0,
+            uses: 0,
+            modified: true,
+            promptHistory: promptHistory,
+            sourceImageId: sourceImage.id
+          });
+
+          // Update source image usage count
+          await room.collection('gallery_images').update(sourceImage.id, {
+            uses: (sourceImage.uses || 0) + 1
+          });
+        }
+
+        // Update current image reference
+        currentImage.src = imageUrl;
+      }
+      
+      document.getElementById('fillImagePrompt').style.display = 'none';
+      generatedImage.remove();
+    }
+  };
+
+  document.body.appendChild(generatedImage);
+}
