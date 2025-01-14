@@ -1139,7 +1139,7 @@
       }
     }
 
-    async function generateImage() {
+    function generateImage() {
       const prefixSelect = document.getElementById('prefixPrompt');
       const promptInput = document.getElementById('promptInput');
       const suffixSelect = document.getElementById('suffixPrompt');
@@ -1409,42 +1409,41 @@
         ctx.putImageData(imageData, 0, 0);
         originalImageData = imageData;
 
-        // Get source image and handle database updates
-        const sourceImage = galleryImages.find(img => img.imageUrl === currentImage.src);
+        const sourceImage = galleryImages.find(img => 
+          img.imageUrl === currentImage.src
+        );
         
         if (sourceImage) {
-          // Update source image usage count only once
           await room.collection('gallery_images').update(sourceImage.id, {
             uses: (sourceImage.uses || 0) + 1
           });
           
-          // Create a new prompt history entry
-          const promptHistory = sourceImage.promptHistory ? 
-            [...sourceImage.promptHistory] : 
-            [{
-              prompt: sourceImage.prompt,
-              timestamp: sourceImage.created_at,
-              username: sourceImage.username,
-              type: 'original'
-            }];
-
-          // Add the new fill modification to history
+          // Get the base prompt history - either from the current image or create new from source
+          const basePromptHistory = galleryImages.find(img => 
+            img.imageUrl === currentImage.src
+          )?.promptHistory || [{
+            prompt: sourceImage.prompt,
+            timestamp: sourceImage.created_at,
+            username: sourceImage.username
+          }];
+          
+          // Create a fresh copy to avoid reference issues
+          const promptHistory = [...basePromptHistory];
+          
           promptHistory.push({
             prompt: fullPrompt,
             timestamp: new Date().toISOString(),
             type: 'selection-fill',
             username: room.party.client.username
           });
-
-          // Create new image blob and upload
+          
           const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
           const file = new File([blob], 'edited-image.png', { type: 'image/png' });
           const imageUrl = await websim.upload(file);
           
-          // Create single new database entry with complete history
           await room.collection('gallery_images').create({
             prompt: fullPrompt,
-            title: sourceImage.title || sourceImage.prompt,
+            title: fullPrompt,
             imageUrl: imageUrl,
             views: 0,
             uses: 0,

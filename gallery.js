@@ -1,6 +1,3 @@
-Since the plan doesn't contain any changes, the updated code remains the same as the current code:
-
-```javascript
 const room = new WebsimSocket();
 let galleryImages = [];
 let currentTab = 'recent';
@@ -12,12 +9,22 @@ let currentPage = 1;
 const itemsPerPage = 10;
 
 async function initGallery() {
-  galleryImages = await room.collection('gallery_images').getList();
-  room.collection('gallery_images').subscribe(images => {
+  try {
+    const [images, unsubscribe] = await Promise.all([
+      room.collection('gallery_images').getList(),
+      room.collection('gallery_images').subscribe(newImages => {
+        galleryImages = newImages;
+        renderGallery();
+      })
+    ]);
+    
     galleryImages = images;
     renderGallery();
-  });
-  renderGallery();
+    return unsubscribe;
+  } catch (error) {
+    console.error('Error initializing gallery:', error);
+    throw error;
+  }
 }
 
 function renderGallery() {
@@ -95,34 +102,43 @@ async function showGalleryTab(tab) {
 }
 
 async function loadGalleryImage(id) {
-  const image = galleryImages.find(img => img.id === id);
-  if (!image) return;
-  
-  await room.collection('gallery_images').update(id, {
-    views: (image.views || 0) + 1
-  });
+  try {
+    const image = galleryImages.find(img => img.id === id);
+    if (!image) return;
 
-  const imageContainer = document.getElementById('imageContainer');
-  const existingImages = imageContainer.querySelectorAll('img');
-  existingImages.forEach(img => img.remove());
-  
-  const generatedImage = document.createElement('img');
-  generatedImage.id = `generatedImage_${imageCounter++}`;
-  generatedImage.className = 'generated-image';
-  generatedImage.style.display = 'none';
-  generatedImage.crossOrigin = 'anonymous';
-  generatedImage.src = image.imageUrl;
-  generatedImage.alt = image.prompt;
-  
-  imageContainer.appendChild(generatedImage);
-  currentImage = generatedImage;
-  
-  document.getElementById('saveButton').style.display = 'block';
-  document.getElementById('addGalleryButton').style.display = 'block';
-  
-  currentImage.onload = function () {
+    await room.collection('gallery_images').update(id, {
+      views: (image.views || 0) + 1,
+      uses: (image.uses || 0) + 1
+    });
+
+    const imageContainer = document.getElementById('imageContainer');
+    const existingImages = imageContainer.querySelectorAll('img');
+    existingImages.forEach(img => img.remove());
+
+    const generatedImage = document.createElement('img');
+    generatedImage.id = `generatedImage_${Date.now()}`;
+    generatedImage.className = 'generated-image';
+    generatedImage.style.display = 'none';
+    generatedImage.crossOrigin = 'anonymous';
+
+    await new Promise((resolve, reject) => {
+      generatedImage.onload = resolve;
+      generatedImage.onerror = reject;
+      generatedImage.src = image.imageUrl;
+      generatedImage.alt = image.prompt;
+    });
+
+    imageContainer.appendChild(generatedImage);
+    currentImage = generatedImage;
+    
+    document.getElementById('saveButton').style.display = 'block';
+    document.getElementById('addGalleryButton').style.display = 'block';
+
     setupImageEditor();
-  };
+  } catch (error) {
+    console.error('Error loading gallery image:', error);
+    throw error;
+  }
 }
 
 function editImage(id) {
@@ -180,5 +196,160 @@ function changePage(delta) {
   if (newPage >= 1 && newPage <= totalPages) {
     currentPage = newPage;
     renderGallery();
+  }
+}
+
+async function addToGallery() {
+  try {
+    const canvas = document.getElementById('editCanvas');
+    const promptInput = document.getElementById('promptInput');
+    const prefixSelect = document.getElementById('prefixPrompt');
+    const suffixSelect = document.getElementById('suffixPrompt');
+    const fullPrompt = `${prefixSelect.value}${promptInput.value.trim()}${suffixSelect.value}`;
+
+    const sourceImage = galleryImages.find(img => 
+      img.imageUrl === currentImage.src
+    );
+
+    if (sourceImage) {
+      await room.collection('gallery_images').update(sourceImage.id, {
+        uses: (sourceImage.uses || 0) + 1,
+        views: (sourceImage.views || 0) + 1
+      });
+    }
+
+    const promptHistory = sourceImage ? 
+      [...(sourceImage.promptHistory || [{
+        prompt: sourceImage.prompt,
+        timestamp: sourceImage.created_at,
+        username: sourceImage.username
+      }])] : [];
+
+    promptHistory.push({
+      prompt: fullPrompt,
+      timestamp: new Date().toISOString(),
+      username: room.party.client.username
+    });
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const file = new File([blob], 'edited-image.png', { type: 'image/png' });
+    const imageUrl = await websim.upload(file);
+
+    await room.collection('gallery_images').create({
+      prompt: fullPrompt,
+      title: fullPrompt,
+      imageUrl: imageUrl,
+      views: 0,
+      uses: 0,
+      modified: true,
+      promptHistory: promptHistory,
+      sourceImageId: sourceImage?.id
+    });
+
+    alert('Image added to gallery successfully!');
+  } catch (error) {
+    console.error('Error adding to gallery:', error);
+    alert('Failed to add image to gallery. Please try again.');
+    throw error;
+  }
+}
+
+async function generateImage() {
+  const prefixSelect = document.getElementById('prefixPrompt');
+  const promptInput = document.getElementById('promptInput');
+  const suffixSelect = document.getElementById('suffixPrompt');
+  const fullPrompt = `${prefixSelect.value}${promptInput.value.trim()}${suffixSelect.value}`;
+
+  if (!promptInput.value.trim()) {
+    alert('Please enter a prompt!');
+    return;
+  }
+
+  try {
+    const [imageContainer, loadingSpinner, placeholderText, saveButton, addGalleryButton] = 
+      ['imageContainer', 'loadingSpinner', 'placeholderText', 'saveButton', 'addGalleryButton']
+      .map(id => document.getElementById(id));
+
+    loadingSpinner.style.display = 'block';
+    placeholderText.style.display = 'none';
+    saveButton.style.display = 'none';
+    addGalleryButton.style.display = 'none';
+
+    const existingImages = imageContainer.querySelectorAll('img');
+    existingImages.forEach(img => img.remove());
+
+    const generatedImage = document.createElement('img');
+    generatedImage.id = `generatedImage_${Date.now()}`;
+    generatedImage.className = 'generated-image';
+    generatedImage.style.display = 'none';
+    generatedImage.crossOrigin = 'anonymous';
+
+    // Wait for image to load
+    await new Promise((resolve, reject) => {
+      generatedImage.onload = resolve;
+      generatedImage.onerror = reject;
+      generatedImage.src = fullPrompt;
+      generatedImage.alt = fullPrompt;
+    });
+
+    loadingSpinner.style.display = 'none';
+    generatedImage.style.display = 'block';
+    placeholderText.style.display = 'none';  
+    saveButton.style.display = 'block';
+    addGalleryButton.style.display = 'block';
+    currentImage = generatedImage;
+
+    // Add to gallery
+    await room.collection('gallery_images').create({
+      prompt: fullPrompt,
+      imageUrl: generatedImage.src,
+      views: 0,
+      uses: 0,
+      promptHistory: [{
+        prompt: fullPrompt,
+        timestamp: new Date().toISOString(),
+        username: room.party.client.username
+      }]
+    });
+
+    imageContainer.appendChild(generatedImage);
+    setupImageEditor();
+
+  } catch (error) {
+    console.error('Error generating image:', error);
+    alert('Failed to generate image. Please try again.');
+    throw error;
+  }
+}
+
+async function handleImageUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  try {
+    const imageUrl = await websim.upload(file);
+    
+    const uploadedImage = new Image();
+    await new Promise((resolve, reject) => {
+      uploadedImage.onload = resolve;
+      uploadedImage.onerror = reject;
+      uploadedImage.src = URL.createObjectURL(file);
+    });
+
+    currentImage = uploadedImage;
+    setupImageEditor();
+
+    await room.collection('gallery_images').create({
+      imageUrl: imageUrl,
+      prompt: file.name,
+      views: 0,
+      uses: 0,
+      modified: false
+    });
+
+  } catch (error) {
+    console.error('Error uploading image:', error);
+    alert('Failed to upload image. Please try again.');
+    throw error;
   }
 }
