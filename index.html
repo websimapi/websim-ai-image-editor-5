@@ -1151,9 +1151,11 @@
       }
 
       try {
-        const [imageContainer, loadingSpinner, placeholderText, saveButton, addGalleryButton] = 
-          ['imageContainer', 'loadingSpinner', 'placeholderText', 'saveButton', 'addGalleryButton']
-          .map(id => document.getElementById(id));
+        const imageContainer = document.getElementById('imageContainer');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const placeholderText = document.getElementById('placeholderText');
+        const saveButton = document.getElementById('saveButton');
+        const addGalleryButton = document.getElementById('addGalleryButton');
 
         loadingSpinner.style.display = 'block';
         placeholderText.style.display = 'none';
@@ -1179,21 +1181,10 @@
           generatedImage.alt = fullPrompt;
         });
 
-        // Update UI
-        loadingSpinner.style.display = 'none';
-        generatedImage.style.display = 'block';
-        placeholderText.style.display = 'none';  
-        saveButton.style.display = 'block';
-        addGalleryButton.style.display = 'block';
-        
-        // Set as current image
-        currentImage = generatedImage;
-        imageContainer.appendChild(generatedImage);
-
-        // Create single gallery entry for the new image
-        await room.collection('gallery_images').create({
+        // Add to gallery first to avoid duplicate entries
+        const galleryEntry = await room.collection('gallery_images').create({
           prompt: fullPrompt,
-          imageUrl: generatedImage.src, 
+          imageUrl: generatedImage.src,
           views: 0,
           uses: 0,
           promptHistory: [{
@@ -1203,11 +1194,22 @@
           }]
         });
 
+        // Update UI only after successful database operation
+        loadingSpinner.style.display = 'none';
+        generatedImage.style.display = 'block';
+        placeholderText.style.display = 'none';  
+        saveButton.style.display = 'block';
+        addGalleryButton.style.display = 'block';
+        
+        currentImage = generatedImage;
+        imageContainer.appendChild(generatedImage);
         setupImageEditor();
 
       } catch (error) {
         console.error('Error generating image:', error);
         alert('Failed to generate image. Please try again.');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const placeholderText = document.getElementById('placeholderText');
         loadingSpinner.style.display = 'none';
         placeholderText.style.display = 'block';
       }
