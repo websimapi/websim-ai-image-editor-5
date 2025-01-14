@@ -1139,74 +1139,78 @@
       }
     }
 
-    function generateImage() {
+    async function generateImage() {
       const prefixSelect = document.getElementById('prefixPrompt');
       const promptInput = document.getElementById('promptInput');
       const suffixSelect = document.getElementById('suffixPrompt');
       const fullPrompt = `${prefixSelect.value}${promptInput.value.trim()}${suffixSelect.value}`;
-
-      const imageContainer = document.getElementById('imageContainer');
-      const loadingSpinner = document.getElementById('loadingSpinner');
-      const placeholderText = document.getElementById('placeholderText');
-      const saveButton = document.getElementById('saveButton');
-      const editorControls = document.getElementById('editorControls');
-      const addGalleryButton = document.getElementById('addGalleryButton');
 
       if (!promptInput.value.trim()) {
         alert('Please enter a prompt!');
         return;
       }
 
-      loadingSpinner.style.display = 'block';
-      placeholderText.style.display = 'none';
-      saveButton.style.display = 'none';
-      addGalleryButton.style.display = 'none';
+      try {
+        const [imageContainer, loadingSpinner, placeholderText, saveButton, addGalleryButton] = 
+          ['imageContainer', 'loadingSpinner', 'placeholderText', 'saveButton', 'addGalleryButton']
+          .map(id => document.getElementById(id));
 
-      const existingImages = imageContainer.querySelectorAll('img');
-      existingImages.forEach(img => img.remove());
+        loadingSpinner.style.display = 'block';
+        placeholderText.style.display = 'none';
+        saveButton.style.display = 'none';
+        addGalleryButton.style.display = 'none';
 
-      const generatedImage = document.createElement('img');
-      generatedImage.id = `generatedImage_${Date.now()}`;
-      generatedImage.className = 'generated-image';
-      generatedImage.style.display = 'none';
-      generatedImage.crossOrigin = 'anonymous';
-      generatedImage.src = fullPrompt;
-      generatedImage.alt = fullPrompt;
+        // Remove any existing images
+        const existingImages = imageContainer.querySelectorAll('img');
+        existingImages.forEach(img => img.remove());
 
-      const initialSrc = generatedImage.src;
-      
-      generatedImage.onload = async function() {
-        if (generatedImage.src !== initialSrc) {
-          loadingSpinner.style.display = 'none';
-          generatedImage.style.display = 'block';
-          placeholderText.style.display = 'none';
-          saveButton.style.display = 'block';
-          addGalleryButton.style.display = 'block';
-          currentImage = generatedImage;
-          
-          try {
-            await room.collection('gallery_images').create({
-              prompt: fullPrompt,
-              imageUrl: generatedImage.src, 
-              views: 0,
-              uses: 0,
-              promptHistory: [{
-                prompt: fullPrompt,
-                timestamp: new Date().toISOString(),
-                username: room.party.client.username
-              }]
-            });
-            
-            setupImageEditor();
-            
-          } catch (error) {
-            console.error('Error processing generated image:', error);
-            alert('Failed to process generated image. Please try again.');
-          }
-        }
-      };
+        // Create and load the new image
+        const generatedImage = document.createElement('img');
+        generatedImage.id = `generatedImage_${Date.now()}`;
+        generatedImage.className = 'generated-image';
+        generatedImage.style.display = 'none';
+        generatedImage.crossOrigin = 'anonymous';
 
-      imageContainer.appendChild(generatedImage);
+        // Wait for image to load
+        await new Promise((resolve, reject) => {
+          generatedImage.onload = resolve;
+          generatedImage.onerror = reject;
+          generatedImage.src = fullPrompt;
+          generatedImage.alt = fullPrompt;
+        });
+
+        // Update UI
+        loadingSpinner.style.display = 'none';
+        generatedImage.style.display = 'block';
+        placeholderText.style.display = 'none';  
+        saveButton.style.display = 'block';
+        addGalleryButton.style.display = 'block';
+        
+        // Set as current image
+        currentImage = generatedImage;
+        imageContainer.appendChild(generatedImage);
+
+        // Create single gallery entry for the new image
+        await room.collection('gallery_images').create({
+          prompt: fullPrompt,
+          imageUrl: generatedImage.src, 
+          views: 0,
+          uses: 0,
+          promptHistory: [{
+            prompt: fullPrompt,
+            timestamp: new Date().toISOString(),
+            username: room.party.client.username
+          }]
+        });
+
+        setupImageEditor();
+
+      } catch (error) {
+        console.error('Error generating image:', error);
+        alert('Failed to generate image. Please try again.');
+        loadingSpinner.style.display = 'none';
+        placeholderText.style.display = 'block';
+      }
     }
 
     async function handleImageUpload(event) {
@@ -1255,78 +1259,83 @@
         return;
       }
       
-      ctx.save();
-      
-      const fontFamily = document.getElementById('fontFamily').value;
-      const fontSize = document.getElementById('fontSize').value;
-      const color = document.getElementById('textColor').value;
-      
-      // Scale the font size based on the canvas scaling
-      const scaledFontSize = fontSize * currentTextPosition.scaleX;
-      ctx.font = `${scaledFontSize}px ${fontFamily}`;
-      ctx.fillStyle = color;
-      ctx.textBaseline = 'top';
-      ctx.textAlign = 'left';  
-  
-      ctx.fillText(text, currentTextPosition.x, currentTextPosition.y);
-      
-      ctx.restore();
-      
-      originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      try {
+        ctx.save();
+        
+        const fontFamily = document.getElementById('fontFamily').value;
+        const fontSize = document.getElementById('fontSize').value;
+        const color = document.getElementById('textColor').value;
+        
+        // Scale the font size based on the canvas scaling
+        const scaledFontSize = fontSize * currentTextPosition.scaleX;
+        ctx.font = `${scaledFontSize}px ${fontFamily}`;
+        ctx.fillStyle = color;
+        ctx.textBaseline = 'top';
+        ctx.textAlign = 'left';  
 
-      // Add text modification to prompt history if a gallery image is being edited
-      const sourceImage = galleryImages.find(img => img.imageUrl === currentImage.src);
-      
-      if (sourceImage) {
-        // Get the base prompt history - either from the current image or create new from source
-        const basePromptHistory = galleryImages.find(img => 
-          img.imageUrl === currentImage.src
-        )?.promptHistory || [{
-          prompt: sourceImage.prompt,
-          timestamp: sourceImage.created_at,
-          username: sourceImage.username
-        }];
+        ctx.fillText(text, currentTextPosition.x, currentTextPosition.y);
         
-        // Create a fresh copy to avoid reference issues
-        const promptHistory = [...basePromptHistory];
+        ctx.restore();
         
-        // Add text modification entry
-        promptHistory.push({
-          prompt: `Added text: "${text}" (${fontFamily}, ${fontSize}px, ${color})`,
-          timestamp: new Date().toISOString(),
-          type: 'text-edit',
-          username: room.party.client.username
-        });
-        
-        // Create new modified image entry
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-        const file = new File([blob], 'edited-image.png', { type: 'image/png' });
-        const imageUrl = await websim.upload(file);
-        
-        await room.collection('gallery_images').create({
-          prompt: sourceImage.prompt,
-          title: sourceImage.title || sourceImage.prompt,
-          imageUrl: imageUrl,
-          views: 0,
-          uses: 0,
-          modified: true,
-          promptHistory: promptHistory,
-          sourceImageId: sourceImage.id
-        });
+        // Create new ImageData after text is drawn
+        const newImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        originalImageData = newImageData;
 
-        // Update usage count of source image
-        await room.collection('gallery_images').update(sourceImage.id, {
-          uses: (sourceImage.uses || 0) + 1
-        });
+        // Only handle database operations if this is a gallery image
+        const sourceImage = galleryImages.find(img => img.imageUrl === currentImage.src);
+        
+        if (sourceImage) {
+          // First update source image usage count
+          await room.collection('gallery_images').update(sourceImage.id, {
+            uses: (sourceImage.uses || 0) + 1
+          });
+          
+          // Get current state's prompt history
+          const currentImageInGallery = galleryImages.find(img => img.imageUrl === currentImage.src);
+          const basePromptHistory = currentImageInGallery?.promptHistory || [{
+            prompt: sourceImage.prompt,
+            timestamp: sourceImage.created_at,
+            username: sourceImage.username
+          }];
+          
+          // Create new prompt history entry
+          const newPromptHistory = [...basePromptHistory];
+          newPromptHistory.push({
+            prompt: `Added text: "${text}" (${fontFamily}, ${fontSize}px, ${color})`,
+            timestamp: new Date().toISOString(),
+            type: 'text-edit',
+            username: room.party.client.username
+          });
+          
+          // Save the new state as a blob and upload
+          const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+          const file = new File([blob], 'edited-image.png', { type: 'image/png' });
+          const imageUrl = await websim.upload(file);
+          
+          // Create new gallery entry
+          await room.collection('gallery_images').create({
+            prompt: sourceImage.prompt,
+            title: sourceImage.title || sourceImage.prompt,
+            imageUrl: imageUrl,
+            views: 0,
+            uses: 0,
+            modified: true,
+            promptHistory: newPromptHistory,
+            sourceImageId: sourceImage.id
+          });
 
-        // Update the current image reference
-        currentImage.src = imageUrl;
+          // Update current image reference to new version
+          currentImage.src = imageUrl;
+        }
+      } catch (error) {
+        console.error('Error applying text:', error);
+        alert('Failed to apply text. Please try again.');
+      } finally {
+        cancelText();
       }
-      
-      cancelText();
     }
 
-    async function generateSelectionFill() {
+    function generateSelectionFill() {
       if (!currentSelection) return;
       
       const prompt = document.getElementById('selectionPromptInput').value.trim();
