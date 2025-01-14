@@ -8,6 +8,28 @@ let currentImage = null;
 let currentPage = 1;
 const itemsPerPage = 10;
 
+// Add rate limiting variables
+let lastDbOperation = 0;
+const MIN_DB_OPERATION_INTERVAL = 1000; // 1 second in milliseconds
+
+// Helper function to check if enough time has passed since last DB operation
+function canPerformDbOperation() {
+  const now = Date.now();
+  if (now - lastDbOperation < MIN_DB_OPERATION_INTERVAL) {
+    return false;
+  }
+  lastDbOperation = now;
+  return true;
+}
+
+// Wrap database operations with rate limiting
+async function safeDbOperation(operation) {
+  if (!canPerformDbOperation()) {
+    throw new Error('Please wait a moment before performing another operation');
+  }
+  return operation();
+}
+
 async function initGallery() {
   try {
     const [images, unsubscribe] = await Promise.all([
@@ -155,16 +177,25 @@ function editImage(id) {
 
 async function saveEdit() {
   if (!currentEditId) return;
+  
   const input = document.getElementById('editPromptInput');
   const newPrompt = input.value.trim();
+  
   if (!newPrompt) {
     alert('Please enter a prompt');
     return;
   }
-  await room.collection('gallery_images').update(currentEditId, {
-    prompt: newPrompt
-  });
-  cancelEdit();
+  
+  try {
+    await safeDbOperation(async () => {
+      await room.collection('gallery_images').update(currentEditId, {
+        prompt: newPrompt
+      });
+    });
+    cancelEdit();
+  } catch (error) {
+    alert(error.message || 'Failed to save edit. Please try again.');
+  }
 }
 
 function cancelEdit() {
@@ -179,7 +210,14 @@ function cancelEdit() {
 
 async function deleteImage(id) {
   if (!confirm('Are you sure you want to delete this image?')) return;
-  await room.collection('gallery_images').delete(id);
+  
+  try {
+    await safeDbOperation(async () => {
+      await room.collection('gallery_images').delete(id);
+    });
+  } catch (error) {
+    alert(error.message || 'Failed to delete image. Please try again.');
+  }
 }
 
 function filterGallery() {
@@ -206,51 +244,52 @@ async function addToGallery() {
     const prefixSelect = document.getElementById('prefixPrompt');
     const suffixSelect = document.getElementById('suffixPrompt');
     const fullPrompt = `${prefixSelect.value}${promptInput.value.trim()}${suffixSelect.value}`;
-
-    const sourceImage = galleryImages.find(img => 
-      img.imageUrl === currentImage.src
-    );
-
-    if (sourceImage) {
-      await room.collection('gallery_images').update(sourceImage.id, {
-        uses: (sourceImage.uses || 0) + 1,
-        views: (sourceImage.views || 0) + 1
+    
+    await safeDbOperation(async () => {
+      const sourceImage = galleryImages.find(img => 
+        img.imageUrl === currentImage.src
+      );
+      
+      if (sourceImage) {
+        await room.collection('gallery_images').update(sourceImage.id, {
+          uses: (sourceImage.uses || 0) + 1,
+          views: (sourceImage.views || 0) + 1
+        });
+      }
+      
+      const promptHistory = sourceImage ? 
+        [...(sourceImage.promptHistory || [{
+          prompt: sourceImage.prompt,
+          timestamp: sourceImage.created_at,
+          username: sourceImage.username
+        }])] : [];
+      
+      promptHistory.push({
+        prompt: fullPrompt,
+        timestamp: new Date().toISOString(),
+        username: room.party.client.username
       });
-    }
-
-    const promptHistory = sourceImage ? 
-      [...(sourceImage.promptHistory || [{
-        prompt: sourceImage.prompt,
-        timestamp: sourceImage.created_at,
-        username: sourceImage.username
-      }])] : [];
-
-    promptHistory.push({
-      prompt: fullPrompt,
-      timestamp: new Date().toISOString(),
-      username: room.party.client.username
-    });
-
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-    const file = new File([blob], 'edited-image.png', { type: 'image/png' });
-    const imageUrl = await websim.upload(file);
-
-    await room.collection('gallery_images').create({
-      prompt: fullPrompt,
-      title: fullPrompt,
-      imageUrl: imageUrl,
-      views: 0,
-      uses: 0,
-      modified: true,
-      promptHistory: promptHistory,
-      sourceImageId: sourceImage?.id
+      
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const file = new File([blob], 'edited-image.png', { type: 'image/png' });
+      const imageUrl = await websim.upload(file);
+      
+      await room.collection('gallery_images').create({
+        prompt: fullPrompt,
+        title: fullPrompt,
+        imageUrl: imageUrl,
+        views: 0,
+        uses: 0,
+        modified: true,
+        promptHistory: promptHistory,
+        sourceImageId: sourceImage?.id
+      });
     });
 
     alert('Image added to gallery successfully!');
   } catch (error) {
     console.error('Error adding to gallery:', error);
-    alert('Failed to add image to gallery. Please try again.');
-    throw error;
+    alert(error.message || 'Failed to add image to gallery. Please try again.');
   }
 }
 
@@ -300,17 +339,25 @@ async function generateImage() {
     currentImage = generatedImage;
 
     // Add to gallery
-    await room.collection('gallery_images').create({
-      prompt: fullPrompt,
-      imageUrl: generatedImage.src,
-      views: 0,
-      uses: 0,
-      promptHistory: [{
-        prompt: fullPrompt,
-        timestamp: new Date().toISOString(),
-        username: room.party.client.username
-      }]
-    });
+    try {
+      await safeDbOperation(async () => {
+        await room.collection('gallery_images').create({
+          prompt: fullPrompt,
+          imageUrl: generatedImage.src,
+          views: 0,
+          uses: 0,
+          promptHistory: [{
+            prompt: fullPrompt,
+            timestamp: new Date().toISOString(),
+            username: room.party.client.username
+          }]
+        });
+      });
+    } catch (error) {
+      console.error('Error generating image:', error);
+      alert(error.message || 'Failed to generate image. Please try again.');
+      throw error;
+    }
 
     imageContainer.appendChild(generatedImage);
     setupImageEditor();
@@ -339,14 +386,21 @@ async function handleImageUpload(event) {
     currentImage = uploadedImage;
     setupImageEditor();
 
-    await room.collection('gallery_images').create({
-      imageUrl: imageUrl,
-      prompt: file.name,
-      views: 0,
-      uses: 0,
-      modified: false
-    });
-
+    try {
+      await safeDbOperation(async () => {
+        await room.collection('gallery_images').create({
+          imageUrl: imageUrl,
+          prompt: file.name,
+          views: 0,
+          uses: 0,
+          modified: false
+        });
+      });
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert(error.message || 'Failed to upload image. Please try again.');
+    }
+    
   } catch (error) {
     console.error('Error uploading image:', error);
     alert('Failed to upload image. Please try again.');
