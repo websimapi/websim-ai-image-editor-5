@@ -188,54 +188,49 @@ function setTool(tool) {
   canvas.className = tool === 'magicWand' ? 'magic-wand' : '';
 }
 
-async function fillSelection() {
+function fillSelection() {
   if (!currentSelection) return;
+  
   const canvas = document.getElementById('editCanvas');
   const ctx = canvas.getContext('2d');
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = imageData.data;
+  
   const color = document.getElementById('colorPicker').value;
   const r = parseInt(color.substr(1, 2), 16);
   const g = parseInt(color.substr(3, 2), 16);
   const b = parseInt(color.substr(5, 2), 16);
   
-  try {
-    for (let i = 0; i < currentSelection.length; i++) {
-      if (currentSelection[i]) {
-        const pixelPos = i * 4;
-        pixels[pixelPos] = r;
-        pixels[pixelPos + 1] = g;
-        pixels[pixelPos + 2] = b;
-      }
+  for (let i = 0; i < currentSelection.length; i++) {
+    if (currentSelection[i]) {
+      const pixelPos = i * 4;
+      pixels[pixelPos] = r;
+      pixels[pixelPos + 1] = g;
+      pixels[pixelPos + 2] = b;
     }
-    ctx.putImageData(imageData, 0, 0);
-    originalImageData = imageData;
-  } catch (error) {
-    console.error('Error filling selection:', error);
-    throw error;
   }
+  
+  ctx.putImageData(imageData, 0, 0);
+  originalImageData = imageData;
 }
 
-async function setSelectionAlpha() {
+function setSelectionAlpha() {
   if (!currentSelection) return;
+  
   const canvas = document.getElementById('editCanvas');
   const ctx = canvas.getContext('2d');
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = imageData.data;
   
-  try {
-    for (let i = 0; i < currentSelection.length; i++) {
-      if (currentSelection[i]) {
-        const pixelPos = i * 4;
-        pixels[pixelPos + 3] = 0;
-      }
+  for (let i = 0; i < currentSelection.length; i++) {
+    if (currentSelection[i]) {
+      const pixelPos = i * 4;
+      pixels[pixelPos + 3] = 0;
     }
-    ctx.putImageData(imageData, 0, 0);
-    originalImageData = imageData;
-  } catch (error) {
-    console.error('Error setting alpha:', error);
-    throw error;
   }
+  
+  ctx.putImageData(imageData, 0, 0);
+  originalImageData = imageData;
 }
 
 function clearSelection() {
@@ -250,22 +245,4 @@ function resetImage() {
   const ctx = canvas.getContext('2d');
   ctx.putImageData(originalImageData, 0, 0);
   currentSelection = null;
-}
-
-async function saveImage() {
-  try {
-    const canvas = document.getElementById('editCanvas');
-    const link = document.createElement('a');
-    const dataUrl = await new Promise(resolve => {
-      canvas.toBlob(blob => {
-        resolve(URL.createObjectURL(blob));
-      }, 'image/png');
-    });
-    link.download = 'edited-image.png';
-    link.href = dataUrl;
-    link.click();
-  } catch (error) {
-    console.error('Error saving image:', error);
-    throw error;
-  }
 }
