@@ -1187,6 +1187,7 @@
           try {
             await room.collection('gallery_images').create({
               prompt: fullPrompt,
+              title: fullPrompt,
               imageUrl: generatedImage.src, 
               views: 0,
               uses: 0,
@@ -1261,9 +1262,7 @@
       const fontSize = document.getElementById('fontSize').value;
       const color = document.getElementById('textColor').value;
       
-      // Scale the font size based on the canvas scaling
-      const scaledFontSize = fontSize * currentTextPosition.scaleX;
-      ctx.font = `${scaledFontSize}px ${fontFamily}`;
+      ctx.font = `${fontSize}px ${fontFamily}`;
       ctx.fillStyle = color;
       ctx.textBaseline = 'top';
       ctx.textAlign = 'left';  
@@ -1274,11 +1273,9 @@
       
       originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-      // Add text modification to prompt history if a gallery image is being edited
       const sourceImage = galleryImages.find(img => img.imageUrl === currentImage.src);
       
       if (sourceImage) {
-        // Get the base prompt history - either from the current image or create new from source
         const basePromptHistory = galleryImages.find(img => 
           img.imageUrl === currentImage.src
         )?.promptHistory || [{
@@ -1287,10 +1284,8 @@
           username: sourceImage.username
         }];
         
-        // Create a fresh copy to avoid reference issues
         const promptHistory = [...basePromptHistory];
         
-        // Add text modification entry
         promptHistory.push({
           prompt: `Added text: "${text}" (${fontFamily}, ${fontSize}px, ${color})`,
           timestamp: new Date().toISOString(),
@@ -1298,7 +1293,6 @@
           username: room.party.client.username
         });
         
-        // Create new modified image entry
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
         const file = new File([blob], 'edited-image.png', { type: 'image/png' });
         const imageUrl = await websim.upload(file);
@@ -1314,12 +1308,10 @@
           sourceImageId: sourceImage.id
         });
 
-        // Update usage count of source image
         await room.collection('gallery_images').update(sourceImage.id, {
           uses: (sourceImage.uses || 0) + 1
         });
 
-        // Update the current image reference
         currentImage.src = imageUrl;
       }
       
@@ -1418,7 +1410,6 @@
             uses: (sourceImage.uses || 0) + 1
           });
           
-          // Get the base prompt history - either from the current image or create new from source
           const basePromptHistory = galleryImages.find(img => 
             img.imageUrl === currentImage.src
           )?.promptHistory || [{
@@ -1427,7 +1418,6 @@
             username: sourceImage.username
           }];
           
-          // Create a fresh copy to avoid reference issues
           const promptHistory = [...basePromptHistory];
           
           promptHistory.push({
@@ -1452,7 +1442,6 @@
             sourceImageId: sourceImage.id
           });
 
-          // Update the current image reference
           currentImage.src = imageUrl;
         }
         
@@ -1468,23 +1457,19 @@
       const canvas = document.getElementById('editCanvas');
       const rect = canvas.getBoundingClientRect();
       
-      // Remove existing preview
       if (textPreview) {
         textPreview.remove();
       }
       
-      // Create new preview at click position
       textPreview = document.createElement('div');
       textPreview.className = 'text-preview';
       textPreview.style.position = 'fixed';
       textPreview.style.left = `${clientX}px`;
       textPreview.style.top = `${clientY}px`;
 
-      // Calculate scale factor between canvas display size and actual size
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
 
-      // Store scale factors with position
       currentTextPosition = { 
         x: canvasX, 
         y: canvasY,
@@ -1494,19 +1479,16 @@
 
       document.body.appendChild(textPreview);
       
-      // Position controls below preview
       const controlsHeight = 100; 
       const controlsWidth = 250;  
       
       let top = clientY + 30; 
       let left = clientX;
       
-      // Adjust vertical position if too close to bottom
       if (top + controlsHeight > window.innerHeight) {
         top = window.innerHeight - controlsHeight - 10;
       }
       
-      // Adjust horizontal position if too close to right edge
       if (left + controlsWidth > window.innerWidth) {
         left = window.innerWidth - controlsWidth - 10;
       }
@@ -1671,7 +1653,7 @@
 
     function showUserGallery(username) {
       currentUserFilter = username;
-      currentPage = 1;  // Reset to first page
+      currentPage = 1;  
       renderGallery();
     }
 
